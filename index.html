@@ -1,1 +1,251 @@
 
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>DezMax CRM</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:#f1f5f9;font-family:Arial,sans-serif}
+header{padding:20px;background:#172338;display:flex;justify-content:space-between;align-items:center}
+h1{font-size:23px;margin:0;color:#38bdf8}
+main{padding:16px;max-width:900px;margin:auto}
+.card{background:#1c2a40;padding:17px;border-radius:14px;margin-bottom:15px}
+input,select,textarea,button{width:100%;padding:13px;margin:7px 0;border-radius:9px;border:1px solid #40516b;font-size:15px}
+input,select,textarea{background:#101827;color:white}
+button{background:#0284c7;color:white;border:0;font-weight:bold;cursor:pointer}
+button.secondary{background:#475569}
+button.danger{background:#b91c1c}
+.hidden{display:none}
+.small{color:#94a3b8;font-size:13px}
+.request{border-left:4px solid #38bdf8}
+.status{color:#38bdf8;font-weight:bold}
+h2{font-size:19px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+</style>
+</head>
+<body>
+<header>
+<h1>DezMax CRM</h1>
+<button style="width:auto" id="logout" class="hidden">Выйти</button>
+</header>
+<main>
+<section id="login" class="card">
+<h2>Вход в систему</h2>
+<input id="email" type="email" placeholder="Электронная почта">
+<input id="password" type="password" placeholder="Пароль">
+<button id="loginBtn">Войти</button>
+<p id="loginError" class="small"></p>
+</section>
+
+<section id="app" class="hidden">
+<div class="card">
+<h2 id="welcome">Добро пожаловать</h2>
+<p id="roleInfo" class="small"></p>
+</div>
+
+<div id="createBox" class="card hidden">
+<h2>Новая заявка</h2>
+<input id="clientName" placeholder="Имя клиента">
+<input id="phone" placeholder="Телефон клиента">
+<input id="address" placeholder="Адрес">
+<input id="title" placeholder="Название услуги">
+<textarea id="description" placeholder="Описание заявки"></textarea>
+<label>Назначить мастера</label>
+<select id="masterSelect"></select>
+<button id="createBtn">Создать заявку</button>
+<p id="createError" class="small"></p>
+</div>
+
+<div class="card">
+<h2>Заявки</h2>
+<div id="requests"><p class="small">Загрузка заявок...</p></div>
+</div>
+</section>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
+import {
+ getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut
+} from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
+import {
+ getFirestore,doc,getDoc,collection,addDoc,updateDoc,
+ onSnapshot,query,where,serverTimestamp,getDocs
+} from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+
+const firebaseConfig = {
+ apiKey:"AIzaSyDjRppQlJtBxQH52kmOfMO5RLoHR7yXZIc",
+ authDomain:"dezmax-crm.firebaseapp.com",
+ projectId:"dezmax-crm",
+ storageBucket:"dezmax-crm.firebasestorage.app",
+ messagingSenderId:"956443444151",
+ appId:"1:956443444151:web:3bf21aeed45feab5d05e32",
+ measurementId:"G-G7GJ5N5HWJ"
+};
+
+const appFirebase=initializeApp(firebaseConfig);
+const auth=getAuth(appFirebase);
+const db=getFirestore(appFirebase);
+
+const $=id=>document.getElementById(id);
+let currentUser=null;
+let currentProfile=null;
+let unsubscribe=null;
+let masters=[];
+
+function show(id,visible){$(id).classList.toggle("hidden",!visible)}
+
+$("loginBtn").onclick=async()=>{
+ $("loginError").textContent="Выполняется вход...";
+ try{
+  await signInWithEmailAndPassword(auth,$("email").value.trim(),$("password").value);
+  $("loginError").textContent="";
+ }catch(e){
+  $("loginError").textContent="Ошибка входа: проверь почту и пароль.";
+ }
+};
+
+$("logout").onclick=()=>signOut(auth);
+
+onAuthStateChanged(auth,async user=>{
+ if(unsubscribe){unsubscribe();unsubscribe=null;}
+ currentUser=user;
+ if(!user){
+  show("login",true);show("app",false);show("logout",false);
+  return;
+ }
+ try{
+  const profileSnap=await getDoc(doc(db,"users",user.uid));
+  if(!profileSnap.exists())throw new Error("Профиль пользователя не найден");
+  currentProfile=profileSnap.data();
+  if(currentProfile.active===false)throw new Error("Аккаунт отключён");
+
+  show("login",false);show("app",true);show("logout",true);
+  $("welcome").textContent="Здравствуйте, "+(currentProfile.name||"сотрудник");
+  $("roleInfo").textContent=currentProfile.role==="director"?"Роль: Директор":"Роль: Мастер";
+
+  const director=currentProfile.role==="director";
+  show("createBox",director);
+
+  if(director)await loadMasters();
+  loadRequests(director);
+ }catch(e){
+  await signOut(auth);
+  show("login",true);
+  $("loginError").textContent=e.message||"Не удалось загрузить профиль.";
+ }
+});
+
+async function loadMasters(){
+ const snap=await getDocs(query(collection(db,"users"),where("role","==","master")));
+ masters=snap.docs.map(d=>({id:d.id,...d.data()}));
+ $("masterSelect").innerHTML='<option value="">Выберите мастера</option>';
+ masters.forEach(m=>{
+  const option=document.createElement("option");
+  option.value=m.id;
+  option.textContent=m.name||m.id;
+  $("masterSelect").appendChild(option);
+ });
+}
+
+$("createBtn").onclick=async()=>{
+ $("createError").textContent="";
+ const masterId=$("masterSelect").value;
+ if(!$("clientName").value.trim()||!$("phone").value.trim()||
+    !$("address").value.trim()||!masterId){
+  $("createError").textContent="Заполните имя, телефон, адрес и выберите мастера.";
+  return;
+ }
+ try{
+  await addDoc(collection(db,"requests"),{
+   clientName:$("clientName").value.trim(),
+   phone:$("phone").value.trim(),
+   address:$("address").value.trim(),
+   title:$("title").value.trim()||"Заявка",
+   description:$("description").value.trim(),
+   masterId,
+   status:"new",
+   createdAt:serverTimestamp(),
+   updatedAt:serverTimestamp()
+  });
+  ["clientName","phone","address","title","description"].forEach(id=>$(id).value="");
+  $("masterSelect").value="";
+  $("createError").textContent="Заявка создана.";
+ }catch(e){
+  $("createError").textContent="Не удалось создать заявку. Проверьте правила доступа.";
+ }
+};
+
+function loadRequests(director){
+ const requestsRef=collection(db,"requests");
+ const q=director?requestsRef:query(requestsRef,where("masterId","==",currentUser.uid));
+
+ unsubscribe=onSnapshot(q,snapshot=>{
+  $("requests").innerHTML="";
+  if(snapshot.empty){
+   $("requests").innerHTML='<p class="small">Заявок пока нет.</p>';
+   return;
+  }
+  const docs=snapshot.docs.sort((a,b)=>{
+   const ta=a.data().createdAt?.seconds||0;
+   const tb=b.data().createdAt?.seconds||0;
+   return tb-ta;
+  });
+  docs.forEach(item=>{
+   const r=item.data();
+   const card=document.createElement("div");
+   card.className="card request";
+   const master=masters.find(m=>m.id===r.masterId);
+   const title=document.createElement("h2");
+   title.textContent=r.title||"Заявка";
+   const details=document.createElement("p");
+   details.textContent="Клиент: "+(r.clientName||"—")+
+    "\nТелефон: "+(r.phone||"—")+
+    "\nАдрес: "+(r.address||"—")+
+    "\nМастер: "+(master?.name||"—")+
+    "\nОписание: "+(r.description||"—");
+   details.style.whiteSpace="pre-line";
+   const status=document.createElement("p");
+   status.className="status";
+   status.textContent="Статус: "+statusName(r.status);
+   card.append(title,details,status);
+
+   const select=document.createElement("select");
+   ["new","accepted","in_progress","completed","cancelled"].forEach(s=>{
+    const o=document.createElement("option");
+    o.value=s;o.textContent=statusName(s);
+    if(s===(r.status||"new"))o.selected=true;
+    select.appendChild(o);
+   });
+   select.onchange=async()=>{
+    try{
+     await updateDoc(doc(db,"requests",item.id),{
+      status:select.value,updatedAt:serverTimestamp()
+     });
+    }catch(e){alert("Не удалось изменить статус. Проверьте доступ.");}
+   };
+   card.appendChild(select);
+   $("requests").appendChild(card);
+  });
+ },error=>{
+  $("requests").textContent="Ошибка загрузки заявок. Проверьте правила Firestore.";
+ });
+}
+
+function statusName(s){
+ return ({
+  new:"Новая",
+  accepted:"Принята",
+  in_progress:"В работе",
+  completed:"Выполнена",
+  cancelled:"Отменена"
+ })[s]||s||"Новая";
+}
+</script>
+</body>
+</html>
