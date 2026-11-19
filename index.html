@@ -71,8 +71,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
 
 import {
- getFirestore, doc, getDoc, collection, addDoc, updateDoc,
- onSnapshot, query, where, serverTimestamp, getDocs
+getFirestore, doc, getDocFromServer, collection, addDoc, updateDoc,
 } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -138,7 +137,7 @@ onAuthStateChanged(auth, async user => {
  }
 
  try {
-  const profileSnap = await getDoc(doc(db, "users", user.uid));
+  const profileSnap = await getDocFromServer(doc(db, "users", user.uid));
 
   if (!profileSnap.exists()) {
    throw new Error(
