@@ -141,7 +141,9 @@ onAuthStateChanged(auth, async user => {
   const profileSnap = await getDoc(doc(db, "users", user.uid));
 
   if (!profileSnap.exists()) {
-   throw new Error("Профиль пользователя не найден в коллекции users");
+   throw new Error(
+     "Профиль не найден. UID авторизации: " + user.uid
+   );
   }
 
   currentProfile = profileSnap.data();
